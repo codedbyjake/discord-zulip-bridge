@@ -14,7 +14,7 @@ export const zulipLimits = {
 
 export const got = gotDefault.extend( {
 	timeout: {
-		request: 5_000
+		request: 60_000
 	},
 	headers: {
 		'user-agent': 'Discord Zulip Bridge/' + ( isDebug ? 'testing' : process.env.npm_package_version ) + ' (Discord; ' + process.env.npm_package_name + ')'
