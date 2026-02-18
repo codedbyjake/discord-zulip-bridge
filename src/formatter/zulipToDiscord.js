@@ -9,6 +9,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 /** @type {Map<RegExp, {url_template: url_template_lib.Template; group_number_to_name: Record<number, string>}>} */
 const linkifier_map = new Map();
 
+const is_absolute_url = /^(?:[a-z+]+:)?\/\//i;
+
 /**
  * Format Zulip messages into Discord messages
  * @param {Object} msg 
@@ -27,9 +29,15 @@ export default async function formatter( msg, msgData ) {
 	/** @type {import('discord.js').WebhookMessageCreateOptions} */
 	let message = {
 		username: discord_username_prefix + msg.sender_full_name + discord_username_suffix,
-		avatarURL: msg.avatar_url,
 		content: ( msg.is_me_message ? '_' + msg.content.replace( /^\/me /, '' ) + '_' : msg.content ),
 	};
+
+	// Make avatar URL absolute
+	if ( is_absolute_url.test(msg.avatar_url) ) {
+		message.avatarURL = msg.avatar_url;
+	} else {
+		message.avatarURL = zulip.realm + msg.avatar_url;
+	}
 
 	// Text replacements
 	zulipToDiscordReplacements.forEach( (value, key) => {
