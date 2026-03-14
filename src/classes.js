@@ -178,6 +178,16 @@ export class Zulip extends EventEmitter {
 	}
 
 	/**
+	 * Get a temporary file url that doesn't require authentication
+	 * @param {String} fileUrl The file url
+	 * @returns {Promise<String>} The temporary file url
+	 */
+	async getTempFileUrl( fileUrl ) {
+		let body = await this.get( `user_uploads/${fileUrl}` );
+		return body.url;
+	}
+
+	/**
 	 * Get a stream id by channel name
 	 * @param {String} stream The channel name
 	 * @returns {Promise<Number>} The stream id
@@ -190,7 +200,7 @@ export class Zulip extends EventEmitter {
 	/**
 	 * Get a channel by stream id
 	 * @param {Number} stream The stream id
-	 * @returns {Promise<{stream_id: Number, name: String}>} The channel
+	 * @returns {Promise<{stream_id: Number, name: String, is_web_public: Boolean}>} The channel
 	 */
 	async getChannel( stream ) {
 		let body = await this.get( `streams/${stream}` );

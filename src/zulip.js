@@ -1,6 +1,6 @@
 import { zulipLimits } from './classes.js';
 import { zulip, discord } from './clients.js';
-import { default as formatToDiscord, update_linkifier_rules } from './formatter/zulipToDiscord.js';
+import { default as formatToDiscord, editFileUploads, update_linkifier_rules } from './formatter/zulipToDiscord.js';
 import { ignored_zulip_users } from './config.js';
 import { db, channelsTable, messagesTable, uploadsTable } from './db.js';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
@@ -135,6 +135,10 @@ zulip.on( 'message', async msg => {
 		zulipSubject: msg.subject,
 		source: 'zulip',
 	} );
+	if ( discordMsg.embeds.length ) {
+		const newMessage = await editFileUploads(discordMsg);
+		if ( newMessage ) await webhook.editMessage( discordMsg, newMessage );
+	}
 } );
 
 zulip.on( 'update_message', async msg => {

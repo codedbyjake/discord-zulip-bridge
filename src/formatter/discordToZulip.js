@@ -113,7 +113,12 @@ export default async function formatter( msg ) {
 			const fileUrlKey = ( endpoint === 'attachments' ? fileUrl.split('?')[0] : fileUrl );
 			let replacement;
 			const zulipUploads = await db.select().from(uploadsTable).where(eq(uploadsTable.discordFileUrl, fileUrlKey));
-			if ( zulipUploads.length > 0 ) replacement = `${prefix}${zulip.realm}/user_uploads/${zulipUploads[0].zulipFileUrl}${suffix}`;
+			if ( zulipUploads.length > 0 ) {
+				if ( query ) await db.update(uploadsTable).set( {
+					discordFileQuery: query
+				} ).where(eq(uploadsTable.discordFileUrl, fileUrlKey));
+				replacement = `${prefix}${zulip.realm}/user_uploads/${zulipUploads[0].zulipFileUrl}${suffix}`;
+			}
 			else {
 				try {
 					let file = new File( [await got.get( fileUrl ).buffer()], path.split('/').pop() );
@@ -121,6 +126,7 @@ export default async function formatter( msg ) {
 					replacement = `${prefix}${zulip.realm}${zulipFile.url}${suffix}`;
 					await db.insert(uploadsTable).values( {
 						discordFileUrl: fileUrlKey,
+						discordFileQuery: query,
 						zulipFileUrl: zulipFile.url.replace( '/user_uploads/', '' ),
 					} );
 				}

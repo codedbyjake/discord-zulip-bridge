@@ -38,6 +38,7 @@ export const uploadsTable = sqliteTable(
 	'uploads',
 	{
 		discordFileUrl: text().unique().notNull(),
+		discordFileQuery: text().default(''),
 		zulipFileUrl: text().unique().notNull(),
 		zulipFileId: integer().unique(),
 	},

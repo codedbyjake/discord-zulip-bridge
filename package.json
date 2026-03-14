@@ -12,7 +12,7 @@
   "author": "MarkusRost",
   "license": "ISC",
   "engines": {
-    "node": ">=23.1.0"
+    "node": ">=24"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",

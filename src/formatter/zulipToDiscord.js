@@ -1,15 +1,13 @@
 import * as url_template_lib from 'url-template';
-import { messageLink } from 'discord.js';
+import { EmbedType, messageLink } from 'discord.js';
 import { zulipLimits } from '../classes.js';
 import { zulip, discord } from '../clients.js';
 import { discord_username_prefix, discord_username_suffix, mentionable_discord_roles, zulipToDiscordReplacements } from '../config.js';
-import { db, messagesTable, channelsTable } from '../db.js';
+import { db, messagesTable, channelsTable, uploadsTable } from '../db.js';
 import { and, eq, isNull } from 'drizzle-orm';
 
 /** @type {Map<RegExp, {url_template: url_template_lib.Template; group_number_to_name: Record<number, string>}>} */
 const linkifier_map = new Map();
-
-const is_absolute_url = /^(?:[a-z+]+:)?\/\//i;
 
 /**
  * Format Zulip messages into Discord messages
@@ -29,15 +27,11 @@ export default async function formatter( msg, msgData ) {
 	/** @type {import('discord.js').WebhookMessageCreateOptions} */
 	let message = {
 		username: discord_username_prefix + msg.sender_full_name + discord_username_suffix,
+		avatarURL: ( msg.avatar_url ? new URL(msg.avatar_url, zulip.realm).href : null ),
 		content: ( msg.is_me_message ? '_' + msg.content.replace( /^\/me /, '' ) + '_' : msg.content ),
+		embeds: [],
+		files: [],
 	};
-
-	// Make avatar URL absolute
-	if ( is_absolute_url.test(msg.avatar_url) ) {
-		message.avatarURL = msg.avatar_url;
-	} else {
-		message.avatarURL = zulip.realm + msg.avatar_url;
-	}
 
 	// Text replacements
 	zulipToDiscordReplacements.forEach( (value, key) => {
@@ -145,8 +139,32 @@ export default async function formatter( msg, msgData ) {
 	message.content = message.content.replace( /@\*\*([^|*]+)\|\d+\*\*/g, '@**$1**' );
 
 	// File uploads
-	if ( message.content.includes( '](/user_uploads/' ) ) {
+	if ( message.content.includes( '/user_uploads/' ) ) {
 		message.content = message.content.replaceAll( '](/user_uploads/', `](${zulip.realm}/user_uploads/` );
+		if ( !( await zulip.getChannel( msgData.zulipStream ) ).is_web_public ) {
+			const nameList = new Set();
+			const fileLinkRegex = new RegExp('\\]\\((' + RegExp.escape(zulip.realm) + '/user_uploads/(\\d+/[^\\s?]+?/([^\\s/?]+?)))\\)', 'g');
+			let fileLinkMatch;
+			while ( ( fileLinkMatch = fileLinkRegex.exec( message.content ) ) !== null ) {
+				let [_, fullLink, fileUrl, fileName] = fileLinkMatch;
+				const discordUploads = await db.select().from(uploadsTable).where(eq(uploadsTable.zulipFileUrl, fileUrl));
+				if ( discordUploads.length > 0 ) {
+					message.content = message.content.replaceAll( fullLink, discordUploads[0].discordFileUrl + discordUploads[0].discordFileQuery );
+				}
+				else {
+					if ( nameList.has( fileName ) ) fileName = fileUrl;
+					try {
+						const tempUrl = await zulip.getTempFileUrl(fileUrl);
+						message.embeds.push( {url: fullLink, image: {url: `attachment://${fileName}`}} );
+						message.files.push( {attachment: new URL(tempUrl, zulip.realm).href, name: fileName} );
+						nameList.add( fileName );
+					}
+					catch ( error ) {
+						console.log( '- Failed to get temp url for linked file:', error );
+					}
+				}
+			}
+		}
 	}
 
 	// Quotes
@@ -205,6 +223,33 @@ export default async function formatter( msg, msgData ) {
 	}
 
 	return message;
+}
+
+/**
+ * Edit links for files uploaded to Discord
+ * @param {import('discord.js').Message} msg 
+ * @returns {Promise<import('discord.js').WebhookMessageEditOptions?>}
+ */
+export async function editFileUploads( msg ) {
+	/** @type {import('discord.js').WebhookMessageEditOptions} */
+	let message = {
+		content: msg.content,
+		embeds: [],
+		attachments: []
+	};
+	for ( let embed of msg.embeds ) {
+		if ( embed.data.type !== EmbedType.Rich ) continue;
+		if ( !embed.url?.startsWith( zulip.realm + '/user_uploads/' ) ) continue;
+		if ( !embed.image?.url.startsWith( 'https://cdn.discordapp.com/attachments/' ) ) continue;
+		message.content = message.content.replaceAll( embed.url, embed.image.url );
+		const [fileUrl, ...fileQuery] = embed.image.url.split('?');
+		await db.insert(uploadsTable).values( {
+			discordFileUrl: fileUrl,
+			discordFileQuery: ( fileQuery.length ? '?' + fileQuery.join( '?' ) : '' ),
+			zulipFileUrl: embed.url.replace( zulip.realm + '/user_uploads/', '' ),
+		} );
+	}
+	return ( message.content !== msg.content ? message : null );
 }
 
 /**
