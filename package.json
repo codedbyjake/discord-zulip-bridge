@@ -15,17 +15,17 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@libsql/client": "^0.14.0",
-    "discord.js": "^14.18.0",
-    "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.39.3",
-    "got": "^14.4.6",
+    "@libsql/client": "^0.17.0",
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.45.1",
+    "got": "^14.6.6",
     "got-ssrf": "^3.0.0",
-    "npm": "^11.1.0",
+    "npm": "^11.11.1",
     "url-template": "^3.1.1"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.30.4",
-    "tsx": "^4.19.2"
+    "drizzle-kit": "^0.31.9",
+    "tsx": "^4.21.0"
   }
 }
