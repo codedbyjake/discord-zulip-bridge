@@ -13,7 +13,7 @@ discord.on( Events.InteractionCreate, async interaction => {
 	if ( interaction.commandName !== 'Deactivate User' ) return;
 	if ( !interaction.memberPermissions.has( PermissionFlagsBits.BanMembers ) ) return;
 
-	if ( interaction.targetMessage.applicationId !== msg.client.user.id ) {
+	if ( interaction.targetMessage.applicationId !== discord.user.id ) {
 		await interaction.reply( {
 			content: 'This message was not bridged from Zulip!',
 			flags: MessageFlags.Ephemeral,
