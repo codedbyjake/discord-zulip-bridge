@@ -252,12 +252,12 @@ export class Zulip extends EventEmitter {
 	 * @param {String} [options.comment] 
 	 */
 	async deactivateUser( user, options = {} ) {
-		let actions = {
+		let actions = JSON.stringify( {
 			delete_profile: options.delete_profile ?? false,
 			delete_public_channel_messages: options.delete_messages ?? true,
 			delete_private_channel_messages: options.delete_messages ?? true,
 			delete_direct_messages: options.delete_messages ?? true
-		};
+		} );
 		await this.delete( `users/${user}`, {actions, deactivation_notification_comment: options.comment ?? null} );
 	}
 
