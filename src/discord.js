@@ -33,6 +33,8 @@ discord.on( Events.InteractionCreate, async interaction => {
 		return;
 	}
 
+	await interaction.deferReply( { flags: MessageFlags.Ephemeral } );
+
 	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
 	await zulip.deactivateUser( zulipMsg.sender_id );
 	await interaction.reply( {
