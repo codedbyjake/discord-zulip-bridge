@@ -24,7 +24,7 @@ discord.on( Events.InteractionCreate, async interaction => {
 	
 	const zulipMessages = await db.select().from(messagesTable).where(eq(messagesTable.discordMessageId, interaction.targetId));
 
-	if ( zulipMessages.length === 0 || zulipMessages[0].source === 'discord' ) {
+	if ( zulipMessages.length === 0 || zulipMessages[0].source !== 'zulip' ) {
 		await interaction.reply( {
 			content: 'Could not find the message!',
 			flags: MessageFlags.Ephemeral,
@@ -36,7 +36,16 @@ discord.on( Events.InteractionCreate, async interaction => {
 	await interaction.deferReply( { flags: MessageFlags.Ephemeral } );
 
 	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
-	await zulip.deactivateUser( zulipMsg.sender_id );
+	const zulipUser = await zulip.getUser( zulipMsg.sender_id );
+	// Check for Zulip moderator
+	if ( zulipUser.role > 300 ) {
+		await interaction.editReply( {
+			content: 'Zulip moderators can\'t be deactivated!'
+		} );
+		return;
+	}
+	console.log( `- ${interaction.user.username} (${interaction.user.id}) has deactivated ${zulipUser.full_name} (${zulipUser.user_id})` );
+	await zulip.deactivateUser( zulipUser.user_id );
 	await interaction.editReply( {
 		content: zulipMsg.sender_full_name + ' has been deactivated!'
 	} );
