@@ -234,8 +234,8 @@ export async function editFileUploads( msg ) {
 	/** @type {import('discord.js').WebhookMessageEditOptions} */
 	let message = {
 		content: msg.content,
-		embeds: [],
-		attachments: []
+		//embeds: [],
+		//attachments: []
 	};
 	for ( let embed of msg.embeds ) {
 		if ( embed.data.type !== EmbedType.Rich ) continue;

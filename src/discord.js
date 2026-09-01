@@ -1,10 +1,46 @@
-import { Events } from 'discord.js';
-import { zulipLimits } from './classes.js';
+import { Events, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { discordCommands, zulipLimits } from './classes.js';
 import { zulip, discord } from './clients.js';
 import formatToZulip from './formatter/discordToZulip.js';
 import { ignored_discord_users } from './config.js';
 import { db, channelsTable, messagesTable } from './db.js';
 import { eq, inArray } from 'drizzle-orm';
+
+discord.on( Events.InteractionCreate, async interaction => {
+	if ( !interaction.isMessageContextMenuCommand() ) return;
+	if ( !discordCommands.hasOwnProperty( interaction.commandName ) ) return;
+
+	if ( interaction.commandName !== 'Deactivate User' ) return;
+	if ( !interaction.memberPermissions.has( PermissionFlagsBits.BanMembers ) ) return;
+
+	if ( interaction.targetMessage.applicationId !== msg.client.user.id ) {
+		await interaction.reply( {
+			content: 'This message was not bridged from Zulip!',
+			flags: MessageFlags.Ephemeral,
+			withResponse: false
+		} );
+		return;
+	}
+	
+	const zulipMessages = await db.select().from(messagesTable).where(eq(messagesTable.discordMessageId, interaction.targetId));
+
+	if ( zulipMessages.length === 0 || zulipMessages[0].source === 'discord' ) {
+		await interaction.reply( {
+			content: 'Could not find the message!',
+			flags: MessageFlags.Ephemeral,
+			withResponse: false
+		} );
+		return;
+	}
+
+	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
+	await zulip.deactivateUser( zulipMsg.sender_id );
+	await interaction.reply( {
+		content: zulipMsg.sender_full_name + ' has been deactivated!',
+		flags: MessageFlags.Ephemeral,
+		withResponse: false
+	} );
+} );
 
 discord.on( Events.MessageCreate, async msg => {
 	if ( !msg.guildId || !msg.channel.isTextBased() || msg.system ) return;
