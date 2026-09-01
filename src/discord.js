@@ -37,10 +37,8 @@ discord.on( Events.InteractionCreate, async interaction => {
 
 	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
 	await zulip.deactivateUser( zulipMsg.sender_id );
-	await interaction.reply( {
-		content: zulipMsg.sender_full_name + ' has been deactivated!',
-		flags: MessageFlags.Ephemeral,
-		withResponse: false
+	await interaction.editReply( {
+		content: zulipMsg.sender_full_name + ' has been deactivated!'
 	} );
 } );
 
