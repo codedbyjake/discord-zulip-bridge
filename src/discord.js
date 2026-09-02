@@ -38,7 +38,7 @@ discord.on( Events.InteractionCreate, async interaction => {
 	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
 	const zulipUser = await zulip.getUser( zulipMsg.sender_id );
 	// Check for Zulip moderator
-	if ( zulipUser.role > 300 ) {
+	if ( zulipUser.role <= 300 ) {
 		await interaction.editReply( {
 			content: 'Zulip moderators can\'t be deactivated!'
 		} );
