@@ -163,7 +163,13 @@ export default async function formatter( msg, msgData ) {
 	// File uploads
 	if ( message.content.includes( '/user_uploads/' ) ) {
 		message.content = message.content.replaceAll( '](/user_uploads/', `](${zulip.realm}/user_uploads/` );
-		if ( zulipToDiscordFeatures.file_uploads && !( await zulip.getChannel( msgData.zulipStream ) ).is_web_public ) {
+
+		// Nothing is mirrored, so link back to Zulip without letting Discord preview the url
+		if ( !zulipToDiscordFeatures.file_uploads ) {
+			const uploadLinkRegex = new RegExp('!?(\\[[^\\]]*\\]\\()(' + RegExp.escape(zulip.realm) + '/user_uploads/[^\\s)]+)\\)', 'g');
+			message.content = message.content.replace( uploadLinkRegex, '$1<$2>)' );
+		}
+		else if ( !( await zulip.getChannel( msgData.zulipStream ) ).is_web_public ) {
 			const nameList = new Set();
 			const fileLinkRegex = new RegExp('\\]\\((' + RegExp.escape(zulip.realm) + '/user_uploads/(\\d+/[^\\s?]+?/([^\\s/?]+?)))\\)', 'g');
 			let fileLinkMatch;
