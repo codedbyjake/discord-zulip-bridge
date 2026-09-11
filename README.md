@@ -57,7 +57,7 @@ systemctl --user enable --now bridge
 sudo loginctl enable-linger $USER
 ```
 
-The last line is what keeps the service running when you log out, and starts it again after a reboot. Check the node path with `which node` first and correct `ExecStart` if it is not `/usr/bin/node`.
+The last line is what keeps the service running when you log out, and starts it again after a reboot. The service finds node on the service PATH, which covers both `/usr/bin` and `/usr/local/bin`.
 
 | Command | What it does |
 | --- | --- |

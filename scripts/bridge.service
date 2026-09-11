@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/discord-zulip-bridge
-ExecStart=/usr/bin/node main.js
+ExecStart=/usr/bin/env node main.js
 Restart=always
 RestartSec=5
 SyslogIdentifier=bridge
