@@ -45,6 +45,29 @@ ZULIP_REALM="https://your-org.zulipchat.com"
 5. Run `npm start` to start the bridge
 6. See [Commands](#commands) to set up channel links
 
+## Running as a service
+
+The bridge ships with a systemd user service, which restarts it if it crashes, starts it on boot, and makes it impossible to end up with two copies relaying the same message. Install it once on the server, as the user that runs the bridge:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now bridge
+sudo loginctl enable-linger $USER
+```
+
+The last line is what keeps the service running when you log out, and starts it again after a reboot. Check the node path with `which node` first and correct `ExecStart` if it is not `/usr/bin/node`.
+
+| Command | What it does |
+| --- | --- |
+| `systemctl --user status bridge` | Whether it is running, and the last few log lines |
+| `journalctl --user -u bridge -f` | Follow the log |
+| `systemctl --user restart bridge` | Restart it |
+
+The deploy scripts use the service automatically once it exists, and fall back to screen when it does not, so nothing breaks if it has not been installed yet.
+
+
 ## Feature toggles
 
 Every relayed feature can be switched off individually with an optional `features` key in `config.json`.
