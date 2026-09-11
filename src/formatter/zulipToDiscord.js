@@ -2,12 +2,23 @@ import * as url_template_lib from 'url-template';
 import { EmbedType, messageLink } from 'discord.js';
 import { zulipLimits } from '../classes.js';
 import { zulip, discord } from '../clients.js';
-import { discord_username_prefix, discord_username_suffix, mentionable_discord_roles, zulipToDiscordReplacements } from '../config.js';
+import { discord_username_prefix, discord_username_suffix, mentionable_discord_roles, allow_mass_mentions, zulipToDiscordFeatures, zulipToDiscordReplacements } from '../config.js';
 import { db, messagesTable, channelsTable, uploadsTable } from '../db.js';
 import { and, eq, isNull } from 'drizzle-orm';
 
 /** @type {Map<RegExp, {url_template: url_template_lib.Template; group_number_to_name: Record<number, string>}>} */
 const linkifier_map = new Map();
+
+/**
+ * Which mentions a relayed message is allowed to ping
+ * @returns {import('discord.js').MessageMentionOptions} The allowed mentions
+ */
+function allowedMentions() {
+	return {
+		parse: ( allow_mass_mentions ? ['users', 'everyone'] : ['users'] ),
+		roles: ( zulipToDiscordFeatures.role_mentions ? mentionable_discord_roles : [] )
+	};
+}
 
 /**
  * Format Zulip messages into Discord messages
@@ -29,17 +40,20 @@ export default async function formatter( msg, msgData ) {
 		username: discord_username_prefix + msg.sender_full_name + discord_username_suffix,
 		avatarURL: ( msg.avatar_url ? new URL(msg.avatar_url, zulip.realm).href : null ),
 		content: ( msg.is_me_message ? '_' + msg.content.replace( /^\/me /, '' ) + '_' : msg.content ),
+		allowedMentions: allowedMentions(),
 		embeds: [],
 		files: [],
 	};
 
 	// Text replacements
-	zulipToDiscordReplacements.forEach( (value, key) => {
-		message.content = message.content.replaceAll(key, value);
-	} );
+	if ( zulipToDiscordFeatures.text_replacements ) {
+		zulipToDiscordReplacements.forEach( (value, key) => {
+			message.content = message.content.replaceAll(key, value);
+		} );
+	}
 
 	// Discord role mentions
-	if ( mentionable_discord_roles.length ) {
+	if ( zulipToDiscordFeatures.role_mentions && mentionable_discord_roles.length ) {
 		let roles = msgData.discordChannel.guild.roles.cache.filter( role => mentionable_discord_roles.includes( role.id ) );
 		let contentWithoutQuotes = message.content.replace( /(```+)quote\n(.*?)\n\1(?!`)\n*/gs, '' );
 		roles.forEach( role => {
@@ -49,99 +63,107 @@ export default async function formatter( msg, msgData ) {
 	}
 
 	// Silent mentions
-	if ( message.content.includes( '@_' ) ) {
+	if ( zulipToDiscordFeatures.silent_mentions && message.content.includes( '@_' ) ) {
 		message.content = message.content.replaceAll( '@_', '@' );
 	}
 
 	// Message links
-	const linkRegex = /\/#narrow\/(?:stream|channel)\/([^\/\) ]+)\/topic\/([^\/\) ]+)\/near\/(\d+)/g;
-	let linkMatch;
-	while ( ( linkMatch = linkRegex.exec( message.content ) ) !== null ) {
-		let [link, channel, topic, msgId] = linkMatch;
+	if ( zulipToDiscordFeatures.message_links ) {
+		const linkRegex = /\/#narrow\/(?:stream|channel)\/([^\/\) ]+)\/topic\/([^\/\) ]+)\/near\/(\d+)/g;
+		let linkMatch;
+		while ( ( linkMatch = linkRegex.exec( message.content ) ) !== null ) {
+			let [link, channel, topic, msgId] = linkMatch;
 
-		const discordMessages = await db.select().from(messagesTable).where(eq(messagesTable.zulipMessageId, msgId));
-		let replacement = `](<${zulip.realm}${link}>)`;
-		if ( discordMessages.length > 0 ) {
-			/** @type {import('discord.js').GuildChannel} */
-			const discordChannel = await discord.channels.fetch(discordMessages[0].discordChannelId).catch( async error => {
-				if ( error?.code !== 10003 ) return console.error( error );
+			const discordMessages = await db.select().from(messagesTable).where(eq(messagesTable.zulipMessageId, msgId));
+			let replacement = `](<${zulip.realm}${link}>)`;
+			if ( discordMessages.length > 0 ) {
+				/** @type {import('discord.js').GuildChannel} */
+				const discordChannel = await discord.channels.fetch(discordMessages[0].discordChannelId).catch( async error => {
+					if ( error?.code !== 10003 ) return console.error( error );
 		
-				await db.delete(channelsTable).where(eq(channelsTable.discordChannelId, discordMessages[0].discordChannelId));
-				await db.delete(messagesTable).where(eq(messagesTable.discordChannelId, discordMessages[0].discordChannelId));
-				console.log( `- Deleted connection between #${discordMessages[0].discordChannelId} and ${discordMessages[0].zulipStream}>${discordMessages[0].zulipSubject}` );
-				return null;
-			} );
-			if ( discordChannel ) {
-				replacement = `](<${messageLink(discordChannel.id, discordMessages[0].discordMessageId, discordChannel.guildId)}>)`;
+					await db.delete(channelsTable).where(eq(channelsTable.discordChannelId, discordMessages[0].discordChannelId));
+					await db.delete(messagesTable).where(eq(messagesTable.discordChannelId, discordMessages[0].discordChannelId));
+					console.log( `- Deleted connection between #${discordMessages[0].discordChannelId} and ${discordMessages[0].zulipStream}>${discordMessages[0].zulipSubject}` );
+					return null;
+				} );
+				if ( discordChannel ) {
+					replacement = `](<${messageLink(discordChannel.id, discordMessages[0].discordMessageId, discordChannel.guildId)}>)`;
+				}
 			}
+			message.content = message.content.replaceAll( `](${zulip.realm}${link})`, replacement );
 		}
-		message.content = message.content.replaceAll( `](${zulip.realm}${link})`, replacement );
 	}
 
 	// Message mentions
-	const msgMentionRegex = /#\*\*([^>*]+)>([^@*]+)@(\d+)\*\*/g;
-	let msgMentionMatch;
-	while ( ( msgMentionMatch = msgMentionRegex.exec( message.content ) ) !== null ) {
-		let [mention, channel, topic, msgId] = msgMentionMatch;
+	if ( zulipToDiscordFeatures.message_mentions ) {
+		const msgMentionRegex = /#\*\*([^>*]+)>([^@*]+)@(\d+)\*\*/g;
+		let msgMentionMatch;
+		while ( ( msgMentionMatch = msgMentionRegex.exec( message.content ) ) !== null ) {
+			let [mention, channel, topic, msgId] = msgMentionMatch;
 
-		const discordMessages = await db.select().from(messagesTable).where(eq(messagesTable.zulipMessageId, msgId));
-		let replacement = `**[#${channel}>${topic}@${msgId}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}/topic/${encodeURIComponent(topic)}/near/${msgId}>)**`;
-		if ( discordMessages.length > 0 ) {
-			/** @type {import('discord.js').GuildChannel} */
-			const discordChannel = await discord.channels.fetch(discordMessages[0].discordChannelId).catch( async error => {
-				if ( error?.code !== 10003 ) return console.error( error );
+			const discordMessages = await db.select().from(messagesTable).where(eq(messagesTable.zulipMessageId, msgId));
+			let replacement = `**[#${channel}>${topic}@${msgId}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}/topic/${encodeURIComponent(topic)}/near/${msgId}>)**`;
+			if ( discordMessages.length > 0 ) {
+				/** @type {import('discord.js').GuildChannel} */
+				const discordChannel = await discord.channels.fetch(discordMessages[0].discordChannelId).catch( async error => {
+					if ( error?.code !== 10003 ) return console.error( error );
 		
-				await db.delete(channelsTable).where(eq(channelsTable.discordChannelId, discordMessages[0].discordChannelId));
-				await db.delete(messagesTable).where(eq(messagesTable.discordChannelId, discordMessages[0].discordChannelId));
-				console.log( `- Deleted connection between #${discordMessages[0].discordChannelId} and ${discordMessages[0].zulipStream}>${discordMessages[0].zulipSubject}` );
-				return null;
-			} );
-			if ( discordChannel ) {
-				replacement = messageLink(discordChannel.id, discordMessages[0].discordMessageId, discordChannel.guildId);
+					await db.delete(channelsTable).where(eq(channelsTable.discordChannelId, discordMessages[0].discordChannelId));
+					await db.delete(messagesTable).where(eq(messagesTable.discordChannelId, discordMessages[0].discordChannelId));
+					console.log( `- Deleted connection between #${discordMessages[0].discordChannelId} and ${discordMessages[0].zulipStream}>${discordMessages[0].zulipSubject}` );
+					return null;
+				} );
+				if ( discordChannel ) {
+					replacement = messageLink(discordChannel.id, discordMessages[0].discordMessageId, discordChannel.guildId);
+				}
 			}
+			message.content = message.content.replaceAll( mention, replacement );
 		}
-		message.content = message.content.replaceAll( mention, replacement );
 	}
 
 	// Topic mentions
-	const topicMentionRegex = /#\*\*([^>*]+)>([^@*]+)\*\*/g;
-	let topicMentionMatch;
-	while ( ( topicMentionMatch = topicMentionRegex.exec( message.content ) ) !== null ) {
-		let [mention, channel, topic] = topicMentionMatch;
+	if ( zulipToDiscordFeatures.topic_mentions ) {
+		const topicMentionRegex = /#\*\*([^>*]+)>([^@*]+)\*\*/g;
+		let topicMentionMatch;
+		while ( ( topicMentionMatch = topicMentionRegex.exec( message.content ) ) !== null ) {
+			let [mention, channel, topic] = topicMentionMatch;
 
-		const zulipStream = ( await zulip.getStreamId( channel ) );
-		if ( !zulipStream ) continue;
-		const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, zulipStream),eq(channelsTable.zulipSubject, topic)));
-		let replacement = `**[#${channel}>${topic}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}/topic/${encodeURIComponent(topic)}>)**`;
-		if ( discordChannels.length > 0 ) {
-			replacement = `<#${discordChannels[0].discordChannelId}>`;
+			const zulipStream = ( await zulip.getStreamId( channel ) );
+			if ( !zulipStream ) continue;
+			const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, zulipStream),eq(channelsTable.zulipSubject, topic)));
+			let replacement = `**[#${channel}>${topic}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}/topic/${encodeURIComponent(topic)}>)**`;
+			if ( discordChannels.length > 0 ) {
+				replacement = `<#${discordChannels[0].discordChannelId}>`;
+			}
+			message.content = message.content.replaceAll( mention, replacement );
 		}
-		message.content = message.content.replaceAll( mention, replacement );
 	}
 
 	// Channel mentions
-	const channelMentionRegex = /#\*\*([^>*]+)\*\*/g;
-	let channelMentionMatch;
-	while ( ( channelMentionMatch = channelMentionRegex.exec( message.content ) ) !== null ) {
-		let [mention, channel] = channelMentionMatch;
+	if ( zulipToDiscordFeatures.channel_mentions ) {
+		const channelMentionRegex = /#\*\*([^>*]+)\*\*/g;
+		let channelMentionMatch;
+		while ( ( channelMentionMatch = channelMentionRegex.exec( message.content ) ) !== null ) {
+			let [mention, channel] = channelMentionMatch;
 
-		const zulipStream = ( await zulip.getStreamId( channel ) );
-		if ( !zulipStream ) continue;
-		const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, zulipStream),isNull(channelsTable.zulipSubject)));
-		let replacement = `**[#${channel}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}>)**`;
-		if ( discordChannels.length > 0 ) {
-			replacement = `<#${discordChannels[0].discordChannelId}>`;
+			const zulipStream = ( await zulip.getStreamId( channel ) );
+			if ( !zulipStream ) continue;
+			const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, zulipStream),isNull(channelsTable.zulipSubject)));
+			let replacement = `**[#${channel}](<${zulip.realm}/#narrow/channel/${encodeURIComponent(channel)}>)**`;
+			if ( discordChannels.length > 0 ) {
+				replacement = `<#${discordChannels[0].discordChannelId}>`;
+			}
+			message.content = message.content.replaceAll( mention, replacement );
 		}
-		message.content = message.content.replaceAll( mention, replacement );
 	}
 
 	// User mentions
-	message.content = message.content.replace( /@\*\*([^|*]+)\|\d+\*\*/g, '@**$1**' );
+	if ( zulipToDiscordFeatures.user_mentions ) message.content = message.content.replace( /@\*\*([^|*]+)\|\d+\*\*/g, '@**$1**' );
 
 	// File uploads
 	if ( message.content.includes( '/user_uploads/' ) ) {
 		message.content = message.content.replaceAll( '](/user_uploads/', `](${zulip.realm}/user_uploads/` );
-		if ( !( await zulip.getChannel( msgData.zulipStream ) ).is_web_public ) {
+		if ( zulipToDiscordFeatures.file_uploads && !( await zulip.getChannel( msgData.zulipStream ) ).is_web_public ) {
 			const nameList = new Set();
 			const fileLinkRegex = new RegExp('\\]\\((' + RegExp.escape(zulip.realm) + '/user_uploads/(\\d+/[^\\s?]+?/([^\\s/?]+?)))\\)', 'g');
 			let fileLinkMatch;
@@ -168,38 +190,42 @@ export default async function formatter( msg, msgData ) {
 	}
 
 	// Quotes
-	if ( message.content.includes( '```quote\n' ) ) {
+	if ( zulipToDiscordFeatures.quotes && message.content.includes( '```quote\n' ) ) {
 		message.content = replaceQuote( message.content );
 	}
 
 	// Default code blocks
-	if ( zulipLimits.default_code_block_language && message.content.includes( '```\n' ) ) {
+	if ( zulipToDiscordFeatures.default_code_block_language && zulipLimits.default_code_block_language && message.content.includes( '```\n' ) ) {
 		message.content = replaceDefaultCodeBlocks( message.content );
 	}
 
 	// Timestamps
-	message.content = message.content.replace( /<time:([^>]+)>/g, (src, time) => {
-		let date = Date.parse(time);
-		if ( Number.isNaN( date ) ) return src;
-		return `<t:${date.toString().slice(0, -3)}:F>`;
-	} );
+	if ( zulipToDiscordFeatures.timestamps ) {
+		message.content = message.content.replace( /<time:([^>]+)>/g, (src, time) => {
+			let date = Date.parse(time);
+			if ( Number.isNaN( date ) ) return src;
+			return `<t:${date.toString().slice(0, -3)}:F>`;
+		} );
+	}
 
 	// Linkifiers
-	// Based on: https://github.com/zulip/zulip/blob/main/web/third/marked/lib/marked.cjs#L650
-	const regexes = [...linkifier_map.keys()];
-	let escapedContent = message.content.replace( /(`+)(.*?)\1(?!`)/gs, '<codeReplacement>' );
-	regexes.forEach(function (regex) {
-		let linkifierMatch;
-		while ( ( linkifierMatch = regex.exec( escapedContent ) ) !== null ) {
-			let [match, ...groups] = linkifierMatch;
-			// Insert the created URL
-			let href = handleLinkifier(regex, groups, match);
-			if (href !== undefined) {
-				escapedContent = escapedContent.replaceAll( match, '<linkifierReplacement>' );
-				message.content = message.content.replaceAll( match, `[${match}](<${href}>)` );
+	if ( zulipToDiscordFeatures.linkifiers ) {
+		// Based on: https://github.com/zulip/zulip/blob/main/web/third/marked/lib/marked.cjs#L650
+		const regexes = [...linkifier_map.keys()];
+		let escapedContent = message.content.replace( /(`+)(.*?)\1(?!`)/gs, '<codeReplacement>' );
+		regexes.forEach(function (regex) {
+			let linkifierMatch;
+			while ( ( linkifierMatch = regex.exec( escapedContent ) ) !== null ) {
+				let [match, ...groups] = linkifierMatch;
+				// Insert the created URL
+				let href = handleLinkifier(regex, groups, match);
+				if (href !== undefined) {
+					escapedContent = escapedContent.replaceAll( match, '<linkifierReplacement>' );
+					message.content = message.content.replaceAll( match, `[${match}](<${href}>)` );
+				}
 			}
-		}
-	});
+		});
+	}
 
 	// Don't exceed message length limit
 	if ( message.content.length > 2_000 ) {
@@ -234,6 +260,7 @@ export async function editFileUploads( msg ) {
 	/** @type {import('discord.js').WebhookMessageEditOptions} */
 	let message = {
 		content: msg.content,
+		allowedMentions: allowedMentions(),
 		embeds: [],
 		attachments: []
 	};

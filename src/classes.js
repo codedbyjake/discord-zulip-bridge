@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
 import gotDefault from 'got';
 import { gotSsrf } from 'got-ssrf';
 
@@ -20,6 +21,24 @@ export const got = gotDefault.extend( {
 		'user-agent': 'Discord Zulip Bridge/' + ( isDebug ? 'testing' : process.env.npm_package_version ) + ' (Discord; ' + process.env.npm_package_name + ')'
 	}
 }, gotSsrf );
+
+
+/**
+ * Send a request again when the Zulip api rate limit was hit
+ * @param {() => Promise<Object>} request The request to send
+ * @param {Number} [attempts] The number of retries left
+ * @returns {Promise<Object>} The response body
+ */
+async function retryRateLimit( request, attempts = 3 ) {
+	let body = await request();
+	while ( body?.code === 'RATE_LIMIT_HIT' && attempts-- > 0 ) {
+		let retryAfter = Math.min( ( +body['retry-after'] || 1 ) * 1000, 60_000 );
+		console.log( `- Zulip api rate limit hit, retrying in ${Math.round( retryAfter / 1000 )} seconds...` );
+		await sleep( retryAfter );
+		body = await request();
+	}
+	return body;
+}
 
 /** @extends {EventEmitter<ZulipEvents>} */
 export class Zulip extends EventEmitter {
@@ -64,7 +83,7 @@ export class Zulip extends EventEmitter {
 			if ( ( value ?? null ) === null ) return;
 			url.searchParams.append( key, value );
 		} );
-		let body = await this.#got.get( url ).json();
+		let body = await retryRateLimit( () => this.#got.get( url ).json() );
 		if ( body?.result === 'success' ) return body;
 		throw new ZulipError( body );
 	}
@@ -83,9 +102,9 @@ export class Zulip extends EventEmitter {
 			else if ( Array.isArray( value ) ) form.append( key, JSON.stringify( value ) );
 			else form.append( key, value );
 		} );
-		let body = await this.#got.post( this.apiURL + endpoint, {
+		let body = await retryRateLimit( () => this.#got.post( this.apiURL + endpoint, {
 			body: form
-		} ).json();
+		} ).json() );
 		if ( body?.result === 'success' ) return body;
 		throw new ZulipError( body );
 	}
@@ -97,9 +116,9 @@ export class Zulip extends EventEmitter {
 	 */
 	async patch( endpoint, params = {} ) {
 		if ( !endpoint.startsWith( '/' ) ) endpoint = `/${endpoint}`;
-		let body = await this.#got.patch( this.apiURL + endpoint, {
+		let body = await retryRateLimit( () => this.#got.patch( this.apiURL + endpoint, {
 			form: params
-		} ).json();
+		} ).json() );
 		if ( body?.result === 'success' ) return body;
 		throw new ZulipError( body );
 	}
@@ -116,7 +135,7 @@ export class Zulip extends EventEmitter {
 			if ( ( value ?? null ) === null ) return;
 			url.searchParams.append( key, value );
 		} );
-		let body = await this.#got.delete( url ).json();
+		let body = await retryRateLimit( () => this.#got.delete( url ).json() );
 		if ( body?.result === 'success' ) return body;
 		throw new ZulipError( body );
 	}

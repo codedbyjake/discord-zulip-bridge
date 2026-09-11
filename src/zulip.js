@@ -1,8 +1,9 @@
 import { zulipLimits } from './classes.js';
 import { zulip, discord } from './clients.js';
 import { default as formatToDiscord, editFileUploads, update_linkifier_rules } from './formatter/zulipToDiscord.js';
-import { ignored_zulip_users } from './config.js';
-import { db, channelsTable, messagesTable, uploadsTable } from './db.js';
+import { ignored_zulip_users, zulipToDiscordFeatures, rate_limit_exempt_zulip_users } from './config.js';
+import { checkRateLimit } from './ratelimit.js';
+import { db, channelsTable, messagesTable, uploadsTable, isChannelPaused, pausedStatus } from './db.js';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 /** @type {Map<String, import('discord.js').Webhook>} */
@@ -32,7 +33,7 @@ zulip.registerMainQueue( [
 		realm_default_code_block_language: default_code_block_language
 	} = body;
 	console.log( `\n- Successfully registered the main Zulip even queue for ${realm_name}!\n` );
-	update_linkifier_rules( realm_linkifiers );
+	if ( zulipToDiscordFeatures.linkifiers ) update_linkifier_rules( realm_linkifiers );
 	Object.assign( zulipLimits, {
 		max_stream_name_length,
 		max_topic_length,
@@ -44,9 +45,42 @@ zulip.registerMainQueue( [
 	console.log( '- Error during the main event queue:', error );
 } );
 
+/**
+ * Check the rate limit and warn on Discord the first time it is hit
+ * @param {Object} msg The Zulip message to relay
+ * @param {Number} msg.sender_id The user id of the sender
+ * @param {Number} msg.stream_id The channel the message was sent in
+ * @param {String} msg.subject The topic the message was sent in
+ * @param {String} msg.sender_full_name The name of the sender
+ * @returns {Promise<Boolean>} Whether the message may be relayed
+ */
+async function allowedByRateLimit( msg ) {
+	if ( rate_limit_exempt_zulip_users.includes( msg.sender_id ) ) return true;
+
+	const rateLimit = checkRateLimit( 'zulip_to_discord', msg.sender_id, `${msg.stream_id}>${msg.subject}` );
+	if ( rateLimit.allowed ) return true;
+	if ( !rateLimit.tripped ) return false;
+
+	const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, msg.stream_id),eq(channelsTable.zulipSubject, msg.subject)));
+	if ( discordChannels.length === 0 ) return false;
+
+	/** @type {import('discord.js').GuildTextBasedChannel} */
+	const discordChannel = await discord.channels.fetch(discordChannels[0].discordChannelId).catch( () => null );
+	if ( !discordChannel ) return false;
+
+	let source = ( rateLimit.tripped === 'per_user' ? msg.sender_full_name : 'this channel' );
+	console.log( `- Rate limit hit by ${msg.sender_id} in ${msg.stream_id}>${msg.subject}, pausing for ${rateLimit.cooldown} seconds` );
+	await discordChannel.send( {
+		content: `*Rate limit reached, messages from ${source} are not relayed for the next ${rateLimit.cooldown} seconds.*`,
+		allowedMentions: { parse: [] }
+	} );
+	return false;
+}
+
 zulip.on( 'message', async msg => {
 	if ( msg.sender_id === zulip.userId ) return;
 	if ( msg.type === 'private' ) return await onZulipCommand( msg );
+	if ( !zulipToDiscordFeatures.messages ) return;
 	if ( msg.type !== 'stream' ) return;
 	if ( ignored_zulip_users.includes( msg.sender_id ) ) return;
 
@@ -54,6 +88,7 @@ zulip.on( 'message', async msg => {
 	/** @type {null|import('discord.js').TextChannel} */
 	let parentChannel = null;
 	const discordChannels = await db.select().from(channelsTable).where(and(eq(channelsTable.zulipStream, msg.stream_id),eq(channelsTable.zulipSubject, msg.subject)));
+	if ( discordChannels.length > 0 && discordChannels[0].paused ) return;
 	if ( discordChannels.length === 0 ) {
 		if ( msg.subject.startsWith( '✔ ' ) ) return;
 		let parent = msg.subject.includes( '/' ) ? msg.subject.split('/')[0] : null;
@@ -63,7 +98,10 @@ zulip.on( 'message', async msg => {
 		));
 		if ( parentChannels.length === 0 ) return;
 
+		if ( parentChannels[0].paused ) return;
 		if ( !parentChannels[0].includeThreads ) return;
+		if ( !zulipToDiscordFeatures.threads ) return;
+		if ( !( await allowedByRateLimit( msg ) ) ) return;
 		threadName = msg.subject.includes( '/' ) ? msg.subject.split('/').slice(1).join('/') : msg.subject;
 		parentChannel = await discord.channels.fetch(parentChannels[0].discordChannelId).catch( async error => {
 			if ( error?.code !== 10003 ) return console.error( error );
@@ -88,6 +126,9 @@ zulip.on( 'message', async msg => {
 			threadName = null;
 		}
 	}
+	// An already bridged topic, the new topic branch above has its own check
+	else if ( !( await allowedByRateLimit( msg ) ) ) return;
+
 	/** @type {import('discord.js').GuildTextBasedChannel} */
 	const discordChannel = parentChannel || await discord.channels.fetch(discordChannels[0].discordChannelId).catch( async error => {
 		if ( error?.code !== 10003 ) return console.error( error );
@@ -142,6 +183,7 @@ zulip.on( 'message', async msg => {
 } );
 
 zulip.on( 'update_message', async msg => {
+	if ( !zulipToDiscordFeatures.edits ) return;
 	if ( msg.rendering_only ) return;
 	if ( msg.user_id === zulip.userId ) return;
 	if ( ignored_zulip_users.includes( msg.user_id ) ) return;
@@ -151,6 +193,16 @@ zulip.on( 'update_message', async msg => {
 	const discordMessages = await db.select().from(messagesTable).where(eq(messagesTable.zulipMessageId, msg.message_id));
 
 	if ( discordMessages.length === 0 ) return;
+
+	if ( await isChannelPaused( discordMessages[0].discordChannelId ) ) return;
+
+	// Edits count against the same budget as new messages
+	if ( !( await allowedByRateLimit( {
+		sender_id: msg.user_id,
+		stream_id: discordMessages[0].zulipStream,
+		subject: discordMessages[0].zulipSubject,
+		sender_full_name: 'this user'
+	} ) ) ) return;
 	
 	/** @type {import('discord.js').GuildTextBasedChannel} */
 	const discordChannel = await discord.channels.fetch(discordMessages[0].discordChannelId).catch( async error => {
@@ -179,17 +231,21 @@ zulip.on( 'update_message', async msg => {
 	}
 	let webhook = webhookMap.get( webhookChannel.id );
 
+	const editedMessage = await formatToDiscord( msg, {
+		zulipMessageId: msg.message_id,
+		zulipStream: discordMessages[0].zulipStream,
+		zulipSubject: discordMessages[0].zulipSubject,
+		discordChannel
+	} );
+
 	await webhook.editMessage( discordMessages[0].discordMessageId, { threadId,
-		content: ( await formatToDiscord( msg, {
-			zulipMessageId: msg.message_id,
-			zulipStream: discordMessages[0].zulipStream,
-			zulipSubject: discordMessages[0].zulipSubject,
-			discordChannel
-		} ) ).content
+		content: editedMessage.content,
+		allowedMentions: editedMessage.allowedMentions
 	} );
 } );
 
 zulip.on( 'delete_message', async msg => {
+	if ( !zulipToDiscordFeatures.deletes ) return;
 	if ( msg.message_type !== 'stream' ) return;
 
 	/** @type {Number[]} */
@@ -233,7 +289,7 @@ zulip.on( 'attachment', async ({ op, attachment }) => {
 	} ).where(eq(uploadsTable.zulipFileUrl, attachment.path_id));
 } );
 
-zulip.on( 'realm_linkifiers', update_linkifier_rules );
+if ( zulipToDiscordFeatures.linkifiers ) zulip.on( 'realm_linkifiers', update_linkifier_rules );
 
 zulip.on( 'realm:update_dict', settings => {
 	Object.keys( settings ).forEach( setting => {
@@ -256,6 +312,20 @@ async function onZulipCommand( msg ) {
 	// Check for Zulip admin
 	if ( zulipUser.role > 200 ) return;
 
+	// Pause and resume the bridge
+	let [pauseCommand, pauseTarget] = msg.content.match( /^!bridge (pause|resume)(?: (all|#\*\*[^*]+\*\*))?/ )?.slice(1) ?? [];
+	if ( pauseCommand ) return await setPaused( pauseCommand === 'pause', pauseTarget, content => zulip.sendMessage( {
+		type: 'direct',
+		to: [msg.sender_id],
+		content
+	} ) );
+
+	if ( msg.content.startsWith( '!bridge status' ) ) return await zulip.sendMessage( {
+		type: 'direct',
+		to: [msg.sender_id],
+		content: await pausedStatus()
+	} );
+
 	/** @type {[Number, String | null, String, Boolean]} */
 	let [
 		zulipStream,
@@ -268,7 +338,7 @@ async function onZulipCommand( msg ) {
 		return await zulip.sendMessage( {
 			type: 'direct',
 			to: [msg.sender_id],
-			content: '`!bridge <zulipChannelMention> <discordChannelId> <includeThreads>`\n> `!bridge #**Channel>Topic** 123456789012345 true`'
+			content: '`!bridge <zulipChannelMention> <discordChannelId> <includeThreads>`\n> `!bridge #**Channel>Topic** 123456789012345 true`\n`!bridge <pause|resume> [all|<zulipChannelMention>]`\n`!bridge status`'
 		} );
 	}
 
@@ -295,4 +365,32 @@ async function onZulipCommand( msg ) {
 		to: [msg.sender_id],
 		content: 'Bridge added!'
 	} );
+}
+
+/**
+ * Pause or resume bridged channels
+ * @param {Boolean} paused Whether to pause the bridge
+ * @param {String} [target] The channel mention to act on, or "all"
+ * @param {(content: String) => Promise<any>} reply How to answer the command
+ */
+async function setPaused( paused, target, reply ) {
+	let action = ( paused ? 'Paused' : 'Resumed' );
+
+	if ( target === 'all' ) {
+		const channels = await db.update(channelsTable).set( { paused } ).returning();
+		return await reply( `${action} the bridge for all ${channels.length} channels.` );
+	}
+
+	let zulipChannel = target?.match( /^#\*\*([^>*]+)(?:>([^@*]+))?\*\*$/ )?.slice(1);
+	if ( !zulipChannel ) return await reply( '`!bridge <pause|resume> [all|<zulipChannelMention>]`' );
+
+	const zulipStream = ( await zulip.getStreamId( zulipChannel[0] ) );
+	if ( !zulipStream ) return await reply( "Zulip channel doesn't exist or I'm not a subscriber yet!" );
+
+	const channels = await db.update(channelsTable).set( { paused } ).where(and(
+		eq(channelsTable.zulipStream, zulipStream),
+		zulipChannel[1] ? eq(channelsTable.zulipSubject, zulipChannel[1]) : isNull(channelsTable.zulipSubject)
+	)).returning();
+	if ( channels.length === 0 ) return await reply( 'That Zulip channel is not bridged.' );
+	return await reply( `${action} the bridge for ${channels.length} channel.` );
 }

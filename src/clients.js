@@ -1,6 +1,6 @@
 import * as Discord from 'discord.js';
 import { Zulip } from './classes.js';
-import { mentionable_discord_roles } from './config.js';
+import { mentionable_discord_roles, allow_mass_mentions } from './config.js';
 
 export const zulip = new Zulip( {
 	username: process.env.ZULIP_USERNAME,
@@ -15,7 +15,7 @@ export const discord = new Discord.Client( {
 		PresenceManager: 0
 	} ),
 	allowedMentions: {
-		parse: ['users'],
+		parse: ( allow_mass_mentions ? ['users', 'everyone'] : ['users'] ),
 		roles: mentionable_discord_roles,
 		repliedUser: true
 	},

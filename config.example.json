@@ -3,10 +3,62 @@
 	"ignored_zulip_users": [],
 	"mentionable_discord_roles": [],
 	"mentionable_zulip_groups": [],
-	"text_replacements": {
-		":zulip:": "<:zulip:1334889309089562675>"
-	},
+	"text_replacements": {},
 	"upload_files_to_zulip": false,
 	"discord_username_prefix": "",
-	"discord_username_suffix": ""
+	"discord_username_suffix": "",
+	"allowed_discord_guilds": [],
+	"allow_mass_mentions": false,
+	"rate_limit_exempt_discord_users": [],
+	"rate_limit_exempt_zulip_users": [],
+	"rate_limits": {
+		"discord_to_zulip": {
+			"per_user": { "messages": 10, "seconds": 30, "cooldown": 60 },
+			"per_channel": { "messages": 60, "seconds": 30, "cooldown": 30 }
+		},
+		"zulip_to_discord": {
+			"per_user": { "messages": 10, "seconds": 30, "cooldown": 60 },
+			"per_channel": { "messages": 60, "seconds": 30, "cooldown": 30 }
+		}
+	},
+	"features": {
+		"discord_to_zulip": {
+			"messages": true,
+			"edits": true,
+			"deletes": true,
+			"threads": true,
+			"replies": true,
+			"forwards": true,
+			"embeds": true,
+			"message_links": true,
+			"channel_mentions": true,
+			"group_mentions": true,
+			"escape_wildcard_mentions": true,
+			"quote_blocks": true,
+			"text_replacements": true,
+			"timestamps": true,
+			"stickers": true,
+			"attachments": true,
+			"upload_files": false
+		},
+		"zulip_to_discord": {
+			"messages": true,
+			"edits": true,
+			"deletes": true,
+			"threads": true,
+			"text_replacements": true,
+			"role_mentions": true,
+			"user_mentions": true,
+			"silent_mentions": true,
+			"message_links": true,
+			"message_mentions": true,
+			"topic_mentions": true,
+			"channel_mentions": true,
+			"file_uploads": true,
+			"quotes": true,
+			"default_code_block_language": true,
+			"timestamps": true,
+			"linkifiers": true
+		}
+	}
 }
