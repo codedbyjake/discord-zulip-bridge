@@ -1,4 +1,4 @@
-import { zulipLimits } from './classes.js';
+import { discordCommands, zulipLimits } from './classes.js';
 import { zulip, discord } from './clients.js';
 import { default as formatToDiscord, editFileUploads, update_linkifier_rules } from './formatter/zulipToDiscord.js';
 import { ignored_zulip_users, zulipToDiscordFeatures, rate_limit_exempt_zulip_users } from './config.js';
@@ -305,12 +305,24 @@ zulip.on( 'realm:update_dict', settings => {
 async function onZulipCommand( msg ) {
 	if ( msg.sender_id === zulip.userId ) return;
 
-	if ( !msg.content.startsWith( '!bridge' ) ) return;
+	if ( !msg.content.startsWith( '!' ) ) return;
 
 	const zulipUser = await zulip.getUser( msg.sender_id );
-
 	// Check for Zulip admin
 	if ( zulipUser.role > 200 ) return;
+
+	if ( msg.content === '!discord updateCommands' ) {
+		for ( const commandName in discordCommands ) {
+			await discord.application.commands.create( discordCommands[commandName] );
+		}
+		return await zulip.sendMessage( {
+			type: 'direct',
+			to: [msg.sender_id],
+			content: 'Updated all Discord commands!'
+		} );
+	}
+
+	if ( !msg.content.startsWith( '!bridge' ) ) return;
 
 	// Pause and resume the bridge
 	let [pauseCommand, pauseTarget] = msg.content.match( /^!bridge (pause|resume)(?: (all|#\*\*[^*]+\*\*))?/ )?.slice(1) ?? [];

@@ -285,7 +285,7 @@ async function msgAttachmentLinks( msg, msgUrl ) {
 				}
 			}
 		}
-		return `[${description}${attachment.name}](${url})`;
+		return `![${description}${attachment.name}](${url})`;
 	} ) ) ).join('\n');
 }
 
@@ -324,7 +324,7 @@ async function msgStickerLinks( msg, msgUrl ) {
 					}
 				}
 			}
-			text = `[${text}](${url})`
+			text = `![${text}](${url})`
 		}
 		return text;
 	} ) ) ).join('\n');
@@ -355,7 +355,6 @@ async function msgEmbeds( msg, channel, msgUrl ) {
 async function msgRichEmbed( embed, channel ) {
 	if ( embed.data.type !== EmbedType.Rich ) return '';
 	let text = '';
-	let images = [];
 	if ( embed.author?.name ) {
 		let author = embed.author.name;
 		if ( embed.author.url ) author = `[${embed.author.name}](${embed.author.url})`;
@@ -366,14 +365,12 @@ async function msgRichEmbed( embed, channel ) {
 		if ( embed.url ) title = `[${embed.title}](${embed.url})`;
 		let thumbnail = '';
 		if ( embed.thumbnail?.url ) {
-			thumbnail = ` [thumbnail](${embed.thumbnail.url})`;
-			images.push( `[^](${embed.thumbnail.url})` );
+			thumbnail = ` ![thumbnail](${embed.thumbnail.url})`;
 		}
 		text += `**${title}**${thumbnail}\n`;
 	}
 	else if ( embed.thumbnail?.url ) {
-		text += `[thumbnail](${embed.thumbnail.url})\n`;
-		images.push( `[^](${embed.thumbnail.url})` );
+		text += `![thumbnail](${embed.thumbnail.url})\n`;
 	}
 	if ( embed.description ) {
 		text += await msgCleanContent( embed.description, channel ) + '\n';
@@ -384,8 +381,7 @@ async function msgRichEmbed( embed, channel ) {
 		} ) ) ).join('\n') + '\n';
 	}
 	if ( embed.image?.url ) {
-		text += `**[image](${embed.image.url})**\n`;
-		images.push( `**[^](${embed.image.url})**` );
+		text += `**![image](${embed.image.url})**\n`;
 	}
 	if ( embed.footer?.text ) {
 		let timestamp = '';
@@ -395,5 +391,5 @@ async function msgRichEmbed( embed, channel ) {
 	else if ( embed.timestamp ) {
 		text += `<time:${embed.timestamp}>\n`;
 	}
-	return '`````quote\n' + text + '`````' + ( images.length ? '\n' + images.join(' ') : '' );
+	return '`````quote\n' + text + '`````';
 }

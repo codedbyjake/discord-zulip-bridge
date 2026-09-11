@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import gotDefault from 'got';
 import { gotSsrf } from 'got-ssrf';
+import { ApplicationCommandType, InteractionContextType, PermissionFlagsBits } from 'discord.js';
 
 globalThis.isDebug = ( process.argv[2] === 'debug' );
 
@@ -22,6 +23,15 @@ export const got = gotDefault.extend( {
 	}
 }, gotSsrf );
 
+/** @type {{[name: string]: import('discord.js').MessageApplicationCommandData}} */
+export const discordCommands = {
+	['Deactivate User']: {
+		name: 'Deactivate User',
+		type: ApplicationCommandType.Message,
+		contexts: [ InteractionContextType.Guild ],
+		default_member_permissions: String( PermissionFlagsBits.BanMembers )
+	}
+};
 
 /**
  * Send a request again when the Zulip api rate limit was hit
@@ -246,10 +256,27 @@ export class Zulip extends EventEmitter {
 	 * @param {Number} [options.role] 
 	 * @param {{id: Number, value: String}[]} [options.profile_data] 
 	 * @param {String} [options.new_email] 
-	 * @returns {Promise<{user_id: Number, full_name: String, role: Number}>} The user
 	 */
 	async updateUser( user, options = {} ) {
 		await this.patch( `users/${user}`, options );
+	}
+
+	/**
+	 * Deactivate a user
+	 * @param {Number} user The user id
+	 * @param {Object} options 
+	 * @param {Boolean} [options.delete_profile] 
+	 * @param {Boolean} [options.delete_messages] 
+	 * @param {String} [options.comment] 
+	 */
+	async deactivateUser( user, options = {} ) {
+		let actions = JSON.stringify( {
+			delete_profile: options.delete_profile ?? false,
+			delete_public_channel_messages: options.delete_messages ?? true,
+			delete_private_channel_messages: options.delete_messages ?? true,
+			delete_direct_messages: options.delete_messages ?? true
+		} );
+		await this.delete( `users/${user}`, {actions, deactivation_notification_comment: options.comment ?? null} );
 	}
 
 	/**

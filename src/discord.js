@@ -1,5 +1,5 @@
-import { Events, PermissionFlagsBits } from 'discord.js';
-import { zulipLimits } from './classes.js';
+import { Events, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { discordCommands, zulipLimits } from './classes.js';
 import { zulip, discord } from './clients.js';
 import formatToZulip from './formatter/discordToZulip.js';
 import { ignored_discord_users, discordToZulipFeatures, rate_limit_exempt_discord_users } from './config.js';
@@ -108,6 +108,51 @@ async function allowedByRateLimit( msg, zulipChannel ) {
 	} );
 	return false;
 }
+
+discord.on( Events.InteractionCreate, safely( async interaction => {
+	if ( !interaction.isMessageContextMenuCommand() ) return;
+	if ( !discordCommands.hasOwnProperty( interaction.commandName ) ) return;
+
+	if ( interaction.commandName !== 'Deactivate User' ) return;
+	if ( !interaction.memberPermissions.has( PermissionFlagsBits.BanMembers ) ) return;
+
+	if ( interaction.targetMessage.applicationId !== discord.user.id ) {
+		await interaction.reply( {
+			content: 'This message was not bridged from Zulip!',
+			flags: MessageFlags.Ephemeral,
+			withResponse: false
+		} );
+		return;
+	}
+	
+	const zulipMessages = await db.select().from(messagesTable).where(eq(messagesTable.discordMessageId, interaction.targetId));
+
+	if ( zulipMessages.length === 0 || zulipMessages[0].source !== 'zulip' ) {
+		await interaction.reply( {
+			content: 'Could not find the message!',
+			flags: MessageFlags.Ephemeral,
+			withResponse: false
+		} );
+		return;
+	}
+
+	await interaction.deferReply( { flags: MessageFlags.Ephemeral } );
+
+	const zulipMsg = await zulip.getMessage( zulipMessages[0].zulipMessageId );
+	const zulipUser = await zulip.getUser( zulipMsg.sender_id );
+	// Check for Zulip moderator
+	if ( zulipUser.role <= 300 ) {
+		await interaction.editReply( {
+			content: 'Zulip moderators can\'t be deactivated!'
+		} );
+		return;
+	}
+	console.log( `- ${interaction.user.username} (${interaction.user.id}) has deactivated ${zulipUser.full_name} (${zulipUser.user_id})` );
+	await zulip.deactivateUser( zulipUser.user_id );
+	await interaction.editReply( {
+		content: zulipMsg.sender_full_name + ' has been deactivated!'
+	} );
+} ) );
 
 discord.on( Events.MessageCreate, safely( async msg => {
 	if ( !discordToZulipFeatures.messages ) return;

@@ -261,8 +261,8 @@ export async function editFileUploads( msg ) {
 	let message = {
 		content: msg.content,
 		allowedMentions: allowedMentions(),
-		embeds: [],
-		attachments: []
+		//embeds: [],
+		//attachments: []
 	};
 	for ( let embed of msg.embeds ) {
 		if ( embed.data.type !== EmbedType.Rich ) continue;
